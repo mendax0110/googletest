@@ -80,9 +80,9 @@ class IsEmptyMatcher {
   }
 
   // Describes what this matcher matches.
-  void DescribeTo(std::ostream* os) const { *os << "is empty"; }
+  static void DescribeTo(std::ostream* os) { *os << "is empty"; }
 
-  void DescribeNegationTo(std::ostream* os) const { *os << "isn't empty"; }
+  static void DescribeNegationTo(std::ostream* os) { *os << "isn't empty"; }
 };
 
 }  // namespace internal

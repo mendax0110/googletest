@@ -33,7 +33,7 @@
 
 #include "gmock/gmock-cardinalities.h"
 
-#include <limits.h>
+#include <climits>
 
 #include <ostream>  // NOLINT
 #include <sstream>

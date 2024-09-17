@@ -42,11 +42,9 @@
 
 #include "gtest/gtest-printers.h"
 
-#include <stdio.h>
-
+#include <cstdio>
 #include <cctype>
 #include <cstdint>
-#include <cwchar>
 #include <iomanip>
 #include <ios>
 #include <ostream>  // NOLINT
@@ -301,8 +299,8 @@ void PrintTo(__uint128_t v, ::std::ostream* os) {
   // Some configurations have a __uint128_t, but no support for built in
   // division. Do manual long division instead.
 
-  uint64_t high = static_cast<uint64_t>(v >> 64);
-  uint64_t low = static_cast<uint64_t>(v);
+  auto high = static_cast<uint64_t>(v >> 64);
+  auto low = static_cast<uint64_t>(v);
 
   *--p = 0;
   while (high != 0 || low != 0) {
@@ -322,7 +320,7 @@ void PrintTo(__uint128_t v, ::std::ostream* os) {
   *os << p;
 }
 void PrintTo(__int128_t v, ::std::ostream* os) {
-  __uint128_t uv = static_cast<__uint128_t>(v);
+  auto uv = static_cast<__uint128_t>(v);
   if (v < 0) {
     *os << "-";
     uv = -uv;
@@ -460,7 +458,7 @@ void PrintTo(const wchar_t* s, ostream* os) { PrintCStringTo(s, os); }
 namespace {
 
 bool ContainsUnprintableControlCodes(const char* str, size_t length) {
-  const unsigned char* s = reinterpret_cast<const unsigned char*>(str);
+  const auto* s = reinterpret_cast<const unsigned char*>(str);
 
   for (size_t i = 0; i < length; i++) {
     unsigned char ch = *s++;
@@ -481,7 +479,7 @@ bool ContainsUnprintableControlCodes(const char* str, size_t length) {
 bool IsUTF8TrailByte(unsigned char t) { return 0x80 <= t && t <= 0xbf; }
 
 bool IsValidUTF8(const char* str, size_t length) {
-  const unsigned char* s = reinterpret_cast<const unsigned char*>(str);
+  const auto* s = reinterpret_cast<const unsigned char*>(str);
 
   for (size_t i = 0; i < length;) {
     unsigned char lead = s[i++];

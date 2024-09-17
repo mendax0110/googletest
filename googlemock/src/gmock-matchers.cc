@@ -34,12 +34,12 @@
 
 #include "gmock/gmock-matchers.h"
 
-#include <string.h>
-
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 namespace testing {
 namespace internal {
@@ -52,7 +52,9 @@ namespace internal {
 GTEST_API_ std::string FormatMatcherDescription(
     bool negation, const char* matcher_name,
     const std::vector<const char*>& param_names, const Strings& param_values) {
+
   std::string result = ConvertIdentifierNameToWords(matcher_name);
+
   if (!param_values.empty()) {
     result += " " + JoinAsKeyValueTuple(param_names, param_values);
   }
@@ -124,14 +126,14 @@ GTEST_API_ std::string FormatMatcherDescription(
 class MaxBipartiteMatchState {
  public:
   explicit MaxBipartiteMatchState(const MatchMatrix& graph)
-      : graph_(&graph),
-        left_(graph_->LhsSize(), kUnused),
-        right_(graph_->RhsSize(), kUnused) {}
+      : graph_(graph),
+        left_(graph_.LhsSize(), kUnused),
+        right_(graph_.RhsSize(), kUnused) {}
 
   // Returns the edges of a maximal match, each in the form {left, right}.
   ElementMatcherPairs Compute() {
     // 'seen' is used for path finding { 0: unseen, 1: seen }.
-    ::std::vector<char> seen;
+    std::vector<char> seen(graph_.RhsSize(), 0);
     // Searches the residual flow graph for a path from each left node to
     // the sink in the residual flow graph, and if one is found, add flow
     // to the graph. It's okay to search through the left nodes once. The
@@ -144,20 +146,17 @@ class MaxBipartiteMatchState {
     // to visit the left nodes more than once looking for augmented paths.
     // The flow is known to be possible or impossible by looking at the
     // node once.
-    for (size_t ilhs = 0; ilhs < graph_->LhsSize(); ++ilhs) {
-      // Reset the path-marking vector and try to find a path from
-      // source to sink starting at the left_[ilhs] node.
-      GTEST_CHECK_(left_[ilhs] == kUnused)
-          << "ilhs: " << ilhs << ", left_[ilhs]: " << left_[ilhs];
-      // 'seen' initialized to 'graph_->RhsSize()' copies of 0.
-      seen.assign(graph_->RhsSize(), 0);
-      TryAugment(ilhs, &seen);
+    for (size_t ilhs = 0; ilhs < graph_.LhsSize(); ++ilhs) {
+      if (left_[ilhs] == kUnused) {
+        std::fill(seen.begin(), seen.end(), 0);  // Reset for each DFS attempt
+        TryAugment(ilhs, seen);
+      }
     }
     ElementMatcherPairs result;
     for (size_t ilhs = 0; ilhs < left_.size(); ++ilhs) {
-      size_t irhs = left_[ilhs];
-      if (irhs == kUnused) continue;
-      result.push_back(ElementMatcherPair(ilhs, irhs));
+      if (left_[ilhs] != kUnused) {
+        result.emplace_back(ilhs, left_[ilhs]);
+      }
     }
     return result;
   }
@@ -181,12 +180,11 @@ class MaxBipartiteMatchState {
   // left_ element holding kUnused before TryAugment will be holding it
   // when TryAugment returns.
   //
-  bool TryAugment(size_t ilhs, ::std::vector<char>* seen) {
-    for (size_t irhs = 0; irhs < graph_->RhsSize(); ++irhs) {
-      if ((*seen)[irhs]) continue;
-      if (!graph_->HasEdge(ilhs, irhs)) continue;
-      // There's an available edge from ilhs to irhs.
-      (*seen)[irhs] = 1;
+  bool TryAugment(size_t ilhs, std::vector<char>& seen) {
+    for (size_t irhs = 0; irhs < graph_.RhsSize(); ++irhs) {
+      if (seen[irhs] || !graph_.HasEdge(ilhs, irhs)) continue;
+      // There's an available edge from ilhs to irhs
+      seen[irhs] = 1;
       // Next a search is performed to determine whether
       // this edge is a dead end or leads to the sink.
       //
@@ -207,7 +205,7 @@ class MaxBipartiteMatchState {
     return false;
   }
 
-  const MatchMatrix* graph_;  // not owned
+  const MatchMatrix& graph_;
   // Each element of the left_ vector represents a left hand side node
   // (i.e. an element) and each element of right_ is a right hand side
   // node (i.e. a matcher). The values in the left_ vector indicate
@@ -219,8 +217,8 @@ class MaxBipartiteMatchState {
   // Elements of left_ and right_ are either kUnused or mutually
   // referent. Mutually referent means that left_[right_[i]] = i and
   // right_[left_[i]] = i.
-  ::std::vector<size_t> left_;
-  ::std::vector<size_t> right_;
+  std::vector<size_t> left_;
+  std::vector<size_t> right_;
 };
 
 const size_t MaxBipartiteMatchState::kUnused;
@@ -229,248 +227,116 @@ GTEST_API_ ElementMatcherPairs FindMaxBipartiteMatching(const MatchMatrix& g) {
   return MaxBipartiteMatchState(g).Compute();
 }
 
-static void LogElementMatcherPairVec(const ElementMatcherPairs& pairs,
-                                     ::std::ostream* stream) {
-  typedef ElementMatcherPairs::const_iterator Iter;
-  ::std::ostream& os = *stream;
+static void LogElementMatcherPairVec(const ElementMatcherPairs& pairs, std::ostream* stream) {
+  std::ostream& os = *stream;
   os << "{";
   const char* sep = "";
-  for (Iter it = pairs.begin(); it != pairs.end(); ++it) {
-    os << sep << "\n  (" << "element #" << it->first << ", " << "matcher #"
-       << it->second << ")";
+  for (const auto& pair : pairs) {
+    os << sep << "\n  (" << "element #" << pair.first << ", " << "matcher #" << pair.second << ")";
     sep = ",";
   }
   os << "\n}";
 }
 
-bool MatchMatrix::NextGraph() {
-  for (size_t ilhs = 0; ilhs < LhsSize(); ++ilhs) {
-    for (size_t irhs = 0; irhs < RhsSize(); ++irhs) {
-      char& b = matched_[SpaceIndex(ilhs, irhs)];
-      if (!b) {
-        b = 1;
-        return true;
-      }
-      b = 0;
-    }
-  }
-  return false;
-}
-
 void MatchMatrix::Randomize() {
-  for (size_t ilhs = 0; ilhs < LhsSize(); ++ilhs) {
-    for (size_t irhs = 0; irhs < RhsSize(); ++irhs) {
-      char& b = matched_[SpaceIndex(ilhs, irhs)];
-      b = static_cast<char>(rand() & 1);  // NOLINT
-    }
-  }
+  std::generate(matched_.begin(), matched_.end(), []() {
+    return static_cast<char>(rand() & 1);  // NOLINT
+  });
 }
 
 std::string MatchMatrix::DebugString() const {
-  ::std::stringstream ss;
-  const char* sep = "";
+  std::stringstream ss;
   for (size_t i = 0; i < LhsSize(); ++i) {
-    ss << sep;
+    if (i > 0) ss << ";";
     for (size_t j = 0; j < RhsSize(); ++j) {
       ss << HasEdge(i, j);
     }
-    sep = ";";
   }
   return ss.str();
 }
 
-void UnorderedElementsAreMatcherImplBase::DescribeToImpl(
-    ::std::ostream* os) const {
-  switch (match_flags()) {
-    case UnorderedMatcherRequire::ExactMatch:
-      if (matcher_describers_.empty()) {
-        *os << "is empty";
-        return;
-      }
-      if (matcher_describers_.size() == 1) {
-        *os << "has " << Elements(1) << " and that element ";
-        matcher_describers_[0]->DescribeTo(os);
-        return;
-      }
-      *os << "has " << Elements(matcher_describers_.size())
-          << " and there exists some permutation of elements such that:\n";
-      break;
-    case UnorderedMatcherRequire::Superset:
-      *os << "a surjection from elements to requirements exists such that:\n";
-      break;
-    case UnorderedMatcherRequire::Subset:
-      *os << "an injection from elements to requirements exists such that:\n";
-      break;
-  }
-
-  const char* sep = "";
-  for (size_t i = 0; i != matcher_describers_.size(); ++i) {
-    *os << sep;
-    if (match_flags() == UnorderedMatcherRequire::ExactMatch) {
-      *os << " - element #" << i << " ";
-    } else {
-      *os << " - an element ";
-    }
-    matcher_describers_[i]->DescribeTo(os);
-    if (match_flags() == UnorderedMatcherRequire::ExactMatch) {
-      sep = ", and\n";
-    } else {
-      sep = "\n";
-    }
-  }
-}
-
-void UnorderedElementsAreMatcherImplBase::DescribeNegationToImpl(
-    ::std::ostream* os) const {
-  switch (match_flags()) {
-    case UnorderedMatcherRequire::ExactMatch:
-      if (matcher_describers_.empty()) {
-        *os << "isn't empty";
-        return;
-      }
-      if (matcher_describers_.size() == 1) {
-        *os << "doesn't have " << Elements(1) << ", or has " << Elements(1)
-            << " that ";
-        matcher_describers_[0]->DescribeNegationTo(os);
-        return;
-      }
-      *os << "doesn't have " << Elements(matcher_describers_.size())
-          << ", or there exists no permutation of elements such that:\n";
-      break;
-    case UnorderedMatcherRequire::Superset:
-      *os << "no surjection from elements to requirements exists such that:\n";
-      break;
-    case UnorderedMatcherRequire::Subset:
-      *os << "no injection from elements to requirements exists such that:\n";
-      break;
-  }
-  const char* sep = "";
-  for (size_t i = 0; i != matcher_describers_.size(); ++i) {
-    *os << sep;
-    if (match_flags() == UnorderedMatcherRequire::ExactMatch) {
-      *os << " - element #" << i << " ";
-    } else {
-      *os << " - an element ";
-    }
-    matcher_describers_[i]->DescribeTo(os);
-    if (match_flags() == UnorderedMatcherRequire::ExactMatch) {
-      sep = ", and\n";
-    } else {
-      sep = "\n";
-    }
-  }
-}
-
-// Checks that all matchers match at least one element, and that all
-// elements match at least one matcher. This enables faster matching
-// and better error reporting.
-// Returns false, writing an explanation to 'listener', if and only
-// if the success criteria are not met.
 bool UnorderedElementsAreMatcherImplBase::VerifyMatchMatrix(
-    const ::std::vector<std::string>& element_printouts,
+    const std::vector<std::string>& element_printouts,
     const MatchMatrix& matrix, MatchResultListener* listener) const {
-  if (matrix.LhsSize() == 0 && matrix.RhsSize() == 0) {
-    return true;
-  }
 
-  const bool is_exact_match_with_size_discrepency =
-      match_flags() == UnorderedMatcherRequire::ExactMatch &&
-      matrix.LhsSize() != matrix.RhsSize();
-  if (is_exact_match_with_size_discrepency) {
-    // The element count doesn't match.  If the container is empty,
-    // there's no need to explain anything as Google Mock already
-    // prints the empty container. Otherwise we just need to show
-    // how many elements there actually are.
-    if (matrix.LhsSize() != 0 && listener->IsInterested()) {
+  if (matrix.LhsSize() == 0 && matrix.RhsSize() == 0) return true;
+
+  const bool size_mismatch = match_flags() == UnorderedMatcherRequire::ExactMatch
+                             && matrix.LhsSize() != matrix.RhsSize();
+
+  if (size_mismatch) {
+    if (listener->IsInterested() && matrix.LhsSize() != 0) {
       *listener << "which has " << Elements(matrix.LhsSize()) << "\n";
     }
+    return false;
   }
 
-  bool result = !is_exact_match_with_size_discrepency;
-  ::std::vector<char> element_matched(matrix.LhsSize(), 0);
-  ::std::vector<char> matcher_matched(matrix.RhsSize(), 0);
+  std::vector<char> element_matched(matrix.LhsSize(), 0);
+  std::vector<char> matcher_matched(matrix.RhsSize(), 0);
 
-  for (size_t ilhs = 0; ilhs < matrix.LhsSize(); ilhs++) {
-    for (size_t irhs = 0; irhs < matrix.RhsSize(); irhs++) {
-      char matched = matrix.HasEdge(ilhs, irhs);
-      element_matched[ilhs] |= matched;
-      matcher_matched[irhs] |= matched;
+  for (size_t ilhs = 0; ilhs < matrix.LhsSize(); ++ilhs) {
+    for (size_t irhs = 0; irhs < matrix.RhsSize(); ++irhs) {
+      if (matrix.HasEdge(ilhs, irhs)) {
+        element_matched[ilhs] = 1;
+        matcher_matched[irhs] = 1;
+      }
     }
   }
 
+  bool result = true;
   if (match_flags() & UnorderedMatcherRequire::Superset) {
-    const char* sep =
-        "where the following matchers don't match any elements:\n";
     for (size_t mi = 0; mi < matcher_matched.size(); ++mi) {
-      if (matcher_matched[mi]) continue;
-      result = false;
-      if (listener->IsInterested()) {
-        *listener << sep << "matcher #" << mi << ": ";
-        matcher_describers_[mi]->DescribeTo(listener->stream());
-        sep = ",\n";
+      if (!matcher_matched[mi]) {
+        result = false;
+        if (listener->IsInterested()) {
+          *listener << "where matcher #" << mi << " doesn't match any elements.\n";
+        }
       }
     }
   }
 
   if (match_flags() & UnorderedMatcherRequire::Subset) {
-    const char* sep =
-        "where the following elements don't match any matchers:\n";
-    const char* outer_sep = "";
-    if (!result) {
-      outer_sep = "\nand ";
-    }
     for (size_t ei = 0; ei < element_matched.size(); ++ei) {
-      if (element_matched[ei]) continue;
-      result = false;
-      if (listener->IsInterested()) {
-        *listener << outer_sep << sep << "element #" << ei << ": "
-                  << element_printouts[ei];
-        sep = ",\n";
-        outer_sep = "";
+      if (!element_matched[ei]) {
+        result = false;
+        if (listener->IsInterested()) {
+          *listener << "where element #" << ei << " doesn't match any matchers.\n";
+        }
       }
     }
   }
+
   return result;
 }
 
 bool UnorderedElementsAreMatcherImplBase::FindPairing(
     const MatchMatrix& matrix, MatchResultListener* listener) const {
+
   ElementMatcherPairs matches = FindMaxBipartiteMatching(matrix);
-
   size_t max_flow = matches.size();
-  if ((match_flags() & UnorderedMatcherRequire::Superset) &&
-      max_flow < matrix.RhsSize()) {
+
+  if ((match_flags() & UnorderedMatcherRequire::Superset) && max_flow < matrix.RhsSize()) {
     if (listener->IsInterested()) {
-      *listener << "where no permutation of the elements can satisfy all "
-                   "matchers, and the closest match is "
-                << max_flow << " of " << matrix.RhsSize()
-                << " matchers with the pairings:\n";
-      LogElementMatcherPairVec(matches, listener->stream());
-    }
-    return false;
-  }
-  if ((match_flags() & UnorderedMatcherRequire::Subset) &&
-      max_flow < matrix.LhsSize()) {
-    if (listener->IsInterested()) {
-      *listener
-          << "where not all elements can be matched, and the closest match is "
-          << max_flow << " of " << matrix.RhsSize()
-          << " matchers with the pairings:\n";
+      *listener << "Closest match: " << max_flow << " of " << matrix.RhsSize() << " matchers with pairings:\n";
       LogElementMatcherPairVec(matches, listener->stream());
     }
     return false;
   }
 
-  if (matches.size() > 1) {
+  if ((match_flags() & UnorderedMatcherRequire::Subset) && max_flow < matrix.LhsSize()) {
     if (listener->IsInterested()) {
-      const char* sep = "where:\n";
-      for (size_t mi = 0; mi < matches.size(); ++mi) {
-        *listener << sep << " - element #" << matches[mi].first
-                  << " is matched by matcher #" << matches[mi].second;
-        sep = ",\n";
-      }
+      *listener << "Closest match: " << max_flow << " of " << matrix.RhsSize() << " matchers with pairings:\n";
+      LogElementMatcherPairVec(matches, listener->stream());
+    }
+    return false;
+  }
+
+  if (matches.size() > 1 && listener->IsInterested()) {
+    for (const auto& match : matches) {
+      *listener << "element #" << match.first << " is matched by matcher #" << match.second << "\n";
     }
   }
+
   return true;
 }
 

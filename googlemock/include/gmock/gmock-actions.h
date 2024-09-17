@@ -348,6 +348,26 @@ struct is_implicitly_convertible {
   using type = decltype(TestImplicitConversion<From>(0));
   static constexpr bool value = type::value;
 };
+template <typename From, typename To>
+template <typename T>
+std::false_type is_implicitly_convertible<From, To>::TestImplicitConversion(
+    ...) {
+  return std::false_type();
+}
+template <typename From, typename To>
+template <typename T, typename>
+std::true_type is_implicitly_convertible<From, To>::TestImplicitConversion(
+    int) {
+  return std::true_type();
+}
+template <typename From, typename To>
+template <typename T>
+T is_implicitly_convertible<From, To>::Make() {
+  return nullptr;
+}
+template <typename From, typename To>
+template <typename T>
+void is_implicitly_convertible<From, To>::Accept(T) {}
 
 // Like std::invoke_result_t from C++17, but works only for objects with call
 // operators (not e.g. member function pointers, which we don't need specific

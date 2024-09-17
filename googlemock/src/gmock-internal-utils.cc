@@ -35,12 +35,9 @@
 
 #include "gmock/internal/gmock-internal-utils.h"
 
-#include <ctype.h>
+#include <cctype>
 
 #include <array>
-#include <cctype>
-#include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <ostream>  // NOLINT
 #include <string>
@@ -59,45 +56,41 @@ namespace internal {
 GTEST_API_ std::string JoinAsKeyValueTuple(
     const std::vector<const char*>& names, const Strings& values) {
   GTEST_CHECK_(names.size() == values.size());
-  if (values.empty()) {
-    return "";
+  if (values.empty()) return "";
+
+  std::ostringstream result;
+  result << "(" << names[0] << ": " << values[0];
+
+  for (size_t i = 1; i < values.size(); ++i) {
+    result << ", " << names[i] << ": " << values[i];
   }
-  const auto build_one = [&](const size_t i) {
-    return std::string(names[i]) + ": " + values[i];
-  };
-  std::string result = "(" + build_one(0);
-  for (size_t i = 1; i < values.size(); i++) {
-    result += ", ";
-    result += build_one(i);
-  }
-  result += ")";
-  return result;
+  result << ")";
+  return result.str();
 }
 
 // Converts an identifier name to a space-separated list of lower-case
-// words.  Each maximum substring of the form [A-Za-z][a-z]*|\d+ is
-// treated as one word.  For example, both "FooBar123" and
+// words. Each maximum substring of the form [A-Za-z][a-z]*|\d+ is
+// treated as one word. For example, both "FooBar123" and
 // "foo_bar_123" are converted to "foo bar 123".
 GTEST_API_ std::string ConvertIdentifierNameToWords(const char* id_name) {
   std::string result;
-  char prev_char = '\0';
-  for (const char* p = id_name; *p != '\0'; prev_char = *(p++)) {
-    // We don't care about the current locale as the input is
-    // guaranteed to be a valid C++ identifier name.
-    const bool starts_new_word = IsUpper(*p) ||
-                                 (!IsAlpha(prev_char) && IsLower(*p)) ||
-                                 (!IsDigit(prev_char) && IsDigit(*p));
-
-    if (IsAlNum(*p)) {
-      if (starts_new_word && !result.empty()) result += ' ';
+  const char* p = id_name;
+  while (*p != '\0') {
+    if (IsUpper(*p)) {
+      if (!result.empty()) result += ' ';
       result += ToLower(*p);
+    } else if (IsLower(*p) || IsDigit(*p)) {
+      result += ToLower(*p);
+    } else if (!IsAlpha(*p)) {
+      result += ' ';
     }
+    ++p;
   }
   return result;
 }
 
-// This class reports Google Mock failures as Google Test failures.  A
-// user can define another class in a similar fashion if they intend to
+// This class reports Google Mock failures as Google Test failures.
+// A user can define another class in a similar fashion if they intend to
 // use Google Mock with a testing framework other than Google Test.
 class GoogleTestFailureReporter : public FailureReporterInterface {
  public:
@@ -112,17 +105,12 @@ class GoogleTestFailureReporter : public FailureReporterInterface {
   }
 };
 
-// Returns the global failure reporter.  Will create a
+// Returns the global failure reporter. Will create a
 // GoogleTestFailureReporter and return it the first time called.
 GTEST_API_ FailureReporterInterface* GetFailureReporter() {
-  // Points to the global failure reporter used by Google Mock.  gcc
-  // guarantees that the following use of failure_reporter is
-  // thread-safe.  We may need to add additional synchronization to
-  // protect failure_reporter if we port Google Mock to other
-  // compilers.
-  static FailureReporterInterface* const failure_reporter =
-      new GoogleTestFailureReporter();
-  return failure_reporter;
+  static std::unique_ptr<FailureReporterInterface> failure_reporter =
+      std::make_unique<GoogleTestFailureReporter>();
+  return failure_reporter.get();
 }
 
 // Protects global resources (stdout in particular) used by Log().
@@ -131,71 +119,51 @@ static GTEST_DEFINE_STATIC_MUTEX_(g_log_mutex);
 // Returns true if and only if a log with the given severity is visible
 // according to the --gmock_verbose flag.
 GTEST_API_ bool LogIsVisible(LogSeverity severity) {
-  if (GMOCK_FLAG_GET(verbose) == kInfoVerbosity) {
-    // Always show the log if --gmock_verbose=info.
-    return true;
-  } else if (GMOCK_FLAG_GET(verbose) == kErrorVerbosity) {
-    // Always hide it if --gmock_verbose=error.
-    return false;
-  } else {
-    // If --gmock_verbose is neither "info" nor "error", we treat it
-    // as "warning" (its default value).
-    return severity == kWarning;
-  }
+  const auto verbosity = GMOCK_FLAG_GET(verbose);
+  return verbosity == kInfoVerbosity ||
+         (verbosity != kErrorVerbosity && severity == kWarning);
 }
 
 // Prints the given message to stdout if and only if 'severity' >= the level
-// specified by the --gmock_verbose flag.  If stack_frames_to_skip >=
-// 0, also prints the stack trace excluding the top
-// stack_frames_to_skip frames.  In opt mode, any positive
-// stack_frames_to_skip is treated as 0, since we don't know which
-// function calls will be inlined by the compiler and need to be
-// conservative.
+// specified by the --gmock_verbose flag. If stack_frames_to_skip >= 0, also
+// prints the stack trace excluding the top stack_frames_to_skip frames.
 GTEST_API_ void Log(LogSeverity severity, const std::string& message,
                     int stack_frames_to_skip) {
   if (!LogIsVisible(severity)) return;
 
-  // Ensures that logs from different threads don't interleave.
   MutexLock l(&g_log_mutex);
 
   if (severity == kWarning) {
-    // Prints a GMOCK WARNING marker to make the warnings easily searchable.
     std::cout << "\nGMOCK WARNING:";
   }
-  // Pre-pends a new-line to message if it doesn't start with one.
   if (message.empty() || message[0] != '\n') {
     std::cout << "\n";
   }
   std::cout << message;
+
   if (stack_frames_to_skip >= 0) {
 #ifdef NDEBUG
-    // In opt mode, we have to be conservative and skip no stack frame.
     const int actual_to_skip = 0;
 #else
-    // In dbg mode, we can do what the caller tell us to do (plus one
-    // for skipping this function's stack frame).
     const int actual_to_skip = stack_frames_to_skip + 1;
-#endif  // NDEBUG
-
-    // Appends a new-line to message if it doesn't end with one.
-    if (!message.empty() && *message.rbegin() != '\n') {
+#endif
+    if (!message.empty() && message.back() != '\n') {
       std::cout << "\n";
     }
     std::cout << "Stack trace:\n"
-              << ::testing::internal::GetCurrentOsStackTraceExceptTop(
-                     actual_to_skip);
+              << ::testing::internal::GetCurrentOsStackTraceExceptTop(actual_to_skip);
   }
-  std::cout << ::std::flush;
+  std::cout << std::flush;
 }
 
-GTEST_API_ WithoutMatchers GetWithoutMatchers() { return WithoutMatchers(); }
+GTEST_API_ WithoutMatchers GetWithoutMatchers() { return {}; }
 
 GTEST_API_ void IllegalDoDefault(const char* file, int line) {
   internal::Assert(
       false, file, line,
       "You are using DoDefault() inside a composite action like "
       "DoAll() or WithArgs().  This is not supported for technical "
-      "reasons.  Please instead spell out the default action, or "
+      "reasons. Please instead spell out the default action, or "
       "assign the default action to an Action variable and use "
       "the variable in various places.");
 }
@@ -204,7 +172,7 @@ constexpr char UndoWebSafeEncoding(char c) {
   return c == '-' ? '+' : c == '_' ? '/' : c;
 }
 
-constexpr char UnBase64Impl(char c, const char* const base64, char carry) {
+constexpr char UnBase64Impl(unsigned char c, const char* const base64, char carry) {
   return *base64 == 0 ? static_cast<char>(65)
          : *base64 == c
              ? carry
@@ -215,7 +183,7 @@ template <size_t... I>
 constexpr std::array<char, 256> UnBase64Impl(std::index_sequence<I...>,
                                              const char* const base64) {
   return {
-      {UnBase64Impl(UndoWebSafeEncoding(static_cast<char>(I)), base64, 0)...}};
+      {UnBase64Impl(UndoWebSafeEncoding(static_cast<unsigned char>(I)), base64, 0)...}};
 }
 
 constexpr std::array<char, 256> UnBase64(const char* const base64) {
@@ -228,29 +196,30 @@ static constexpr std::array<char, 256> kUnBase64 = UnBase64(kBase64);
 
 bool Base64Unescape(const std::string& encoded, std::string* decoded) {
   decoded->clear();
-  size_t encoded_len = encoded.size();
-  decoded->reserve(3 * (encoded_len / 4) + (encoded_len % 4));
-  int bit_pos = 0;
+  decoded->reserve(3 * (encoded.size() / 4) + (encoded.size() % 4));
+
   char dst = 0;
-  for (int src : encoded) {
-    if (std::isspace(src) || src == '=') {
-      continue;
-    }
+  int bit_pos = 0;
+
+  for (unsigned char src : encoded) {
+    if (std::isspace(src) || src == '=') continue;
+
     char src_bin = kUnBase64[static_cast<size_t>(src)];
     if (src_bin >= 64) {
       decoded->clear();
       return false;
     }
-    if (bit_pos == 0) {
-      dst |= static_cast<char>(src_bin << 2);
-      bit_pos = 6;
-    } else {
-      dst |= static_cast<char>(src_bin >> (bit_pos - 2));
+
+    dst |= static_cast<int>(src_bin << (6 - bit_pos));
+    bit_pos += 6;
+
+    if (bit_pos >= 8) {
       decoded->push_back(dst);
-      dst = static_cast<char>(src_bin << (10 - bit_pos));
-      bit_pos = (bit_pos + 6) % 8;
+      dst = src_bin << (bit_pos - 8);
+      bit_pos -= 8;
     }
   }
+
   return true;
 }
 

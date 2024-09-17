@@ -39,7 +39,7 @@
 #ifndef GOOGLEMOCK_INCLUDE_GMOCK_GMOCK_CARDINALITIES_H_
 #define GOOGLEMOCK_INCLUDE_GMOCK_GMOCK_CARDINALITIES_H_
 
-#include <limits.h>
+#include <climits>
 
 #include <memory>
 #include <ostream>  // NOLINT

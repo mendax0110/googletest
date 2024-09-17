@@ -1183,7 +1183,7 @@ extern "C" char** environ;
 // This function is called in a clone()-ed process and thus must avoid
 // any potentially unsafe operations like malloc or libc functions.
 static int ExecDeathTestChildMain(void* child_arg) {
-  ExecDeathTestArgs* const args = static_cast<ExecDeathTestArgs*>(child_arg);
+  auto* const args = static_cast<ExecDeathTestArgs*>(child_arg);
   GTEST_DEATH_TEST_CHECK_SYSCALL_(close(args->close_fd));
 
   // We need to execute the test program in the same environment where
@@ -1334,7 +1334,7 @@ static pid_t ExecDeathTestSpawnChild(char* const* argv, int close_fd) {
   const bool use_fork = true;
 #endif  // GTEST_HAS_CLONE
 
-  if (use_fork && (child_pid = fork()) == 0) {
+  if ((child_pid = fork()) == 0) {
     _Exit(ExecDeathTestChildMain(&args));
   }
 #endif  // GTEST_OS_QNX
